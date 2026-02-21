@@ -1,9 +1,10 @@
 from datetime import datetime, timedelta
 from jose import JWTError, jwt
 from passlib.context import CryptContext
+import os
 
 # ─── Config ───────────────────────────────────────────────────────
-SECRET_KEY = "your-secret-key-keep-this-safe"  # change this in production!
+SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-keep-this-safe") # change this in production!
 ALGORITHM = "HS256"
 TOKEN_EXPIRE_MINUTES = 30
 
