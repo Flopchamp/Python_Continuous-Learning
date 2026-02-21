@@ -1,6 +1,8 @@
 import sqlite3
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException,Depends
 from pydantic import BaseModel
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from auth import create_token, verify_token, hash_password, verify_password
 
 # ─── Database Manager ─────────────────────────────────────────────
 
@@ -12,16 +14,36 @@ class DatabaseManager:
 
     def setup(self):
         with sqlite3.connect(self.db_name) as conn:
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS students (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    name TEXT NOT NULL,
-                    age INTEGER NOT NULL,
-                    grade INTEGER NOT NULL,
-                    course TEXT NOT NULL
-                )
-            """)
+         conn.execute("""
+            CREATE TABLE IF NOT EXISTS students (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                age INTEGER NOT NULL,
+                grade INTEGER NOT NULL,
+                course TEXT NOT NULL
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT UNIQUE NOT NULL,
+                password TEXT NOT NULL
+            )
+        """)
+        conn.commit()
+    def add_user(self, username, hashed_password):
+        with sqlite3.connect(self.db_name) as conn:
+            conn.execute(
+                "INSERT INTO users (username, password) VALUES (?, ?)",
+                (username, hashed_password)
+            )
             conn.commit()
+    def get_user(self, username):
+        with sqlite3.connect(self.db_name) as conn:
+            cursor = conn.execute(
+                "SELECT * FROM users WHERE username = ?", (username,)
+            )
+            return cursor.fetchone()
 
     def add_student(self, name, age, grade, course):
         with sqlite3.connect(self.db_name) as conn:
@@ -81,6 +103,17 @@ class DatabaseManager:
                 for r in rows
             ]
 
+
+# ─── Auth Setup ───────────────────────────────────────────────────
+
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
+
+def get_current_user(token: str = Depends(oauth2_scheme)):
+    username = verify_token(token)
+    if not username:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    return username
+
 # ─── FastAPI Setup ────────────────────────────────────────────────
 
 app = FastAPI()
@@ -104,7 +137,32 @@ class StudentInput(BaseModel):
 class GradeUpdate(BaseModel):
     grade: int
 
+class UserInput(BaseModel):
+    username: str
+    password: str
+
+#
+# ─── Auth Endpoints ───────────────────────────────────────────────
+@app.post("/auth/register")
+def register(user: UserInput):
+    existing = db.get_user(user.username)   # ✅ prevent duplicate usernames
+    if existing:
+        raise HTTPException(status_code=400, detail="Username already exists")
+    hashed_password = hash_password(user.password)
+    db.add_user(user.username, hashed_password)
+    return {"message": f"User '{user.username}' registered successfully!"}
+
+@app.post("/auth/login")
+def login(form_data: OAuth2PasswordRequestForm = Depends()):
+    user = db.get_user(form_data.username)
+    if not user or not verify_password(form_data.password, user[2]):  # user[2] is password
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+    token = create_token(form_data.username)
+    return {"access_token": token, "token_type": "bearer"}
+
+
 # ─── Endpoints ────────────────────────────────────────────────────
+
 
 @app.get("/")
 def home():
@@ -130,15 +188,16 @@ def get_student(name: str):
             "grade": student[3], "course": student[4]}
 
 @app.post("/students")
-def create_student(student: StudentInput):
+def create_student(student: StudentInput, current_user: str = Depends(get_current_user)):
     existing = db.get_student(student.name)
     if existing:                                          # ✅ prevent duplicates
         raise HTTPException(status_code=400, detail="Student already exists")
     db.add_student(student.name, student.age, student.grade, student.course)
     return {"message": f"Student '{student.name}' added successfully!"}
 
+
 @app.put("/students/{name}")
-def update_student(name: str, student: StudentInput):
+def update_student(name: str, student: StudentInput, current_user: str = Depends(get_current_user)):
     existing = db.get_student(name)
     if not existing:
         raise HTTPException(status_code=404, detail="Student not found")
@@ -146,7 +205,7 @@ def update_student(name: str, student: StudentInput):
     return {"message": f"Student '{name}' updated successfully!"}
 
 @app.put("/students/{name}/grade")
-def update_grade(name: str, grade_update: GradeUpdate):
+def update_grade(name: str, grade_update: GradeUpdate, current_user: str = Depends(get_current_user)):
     existing = db.get_student(name)
     if not existing:
         raise HTTPException(status_code=404, detail="Student not found")
@@ -156,7 +215,7 @@ def update_grade(name: str, grade_update: GradeUpdate):
     return {"message": f"Grade updated to {grade_update.grade} for '{name}'"}
 
 @app.delete("/students/{name}")
-def delete_student(name: str):                            # ✅ no body needed
+def delete_student(name: str, current_user: str = Depends(get_current_user)):                            # ✅ no body needed
     existing = db.get_student(name)
     if not existing:
         raise HTTPException(status_code=404, detail="Student not found")
