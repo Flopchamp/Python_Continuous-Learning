@@ -2,7 +2,12 @@ from sqlalchemy import create_engine, Column, Integer, String, Float, ForeignKey
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 
 # ─── Update your password here ────────────────────────────────────
-DATABASE_URL = "postgresql://postgres:4885@localhost/expense_tracker"
+import os
+
+DATABASE_URL = os.getenv(
+    "DATABASE_URL",
+    "postgresql://postgres:yourpassword@localhost/expense_tracker"
+)
 
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(bind=engine)
